@@ -1,0 +1,206 @@
+---
+title: "Milestone report - Coursera Data Science Capstone"
+author: "Krystian Szczucki"
+date: "2016-03-13"
+output: html_document
+mode: selfcontained
+---
+
+## Executive Summary
+
+  In this project, our goal is to download provided training data, load it, transform it and perform some basic exploratory analysis on it.
+
+You can download the dataset from the link below.
+https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip
+
+You can download it directly via your browser or through R with few simple functions.
+Just be sure you are in your destination folder.
+ 
+## Input Data
+```{r,eval=FALSE}
+URL <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+download.file(URL,destfile = "Coursera-SwiftKey.zip")
+unzip(zipfile = "Coursera-SwiftKey.zip")
+```
+
+First we should look at the size of our unzipped files (US only):
+
+```{r}
+library(wordcloud)
+library(tm)
+library(RWeka)
+library(slam)
+library(utils)
+
+size <- data.frame(c("blogs","news","twitter"),c(file.info("final/en_US/en_US.blogs.txt")[[1]],file.info("final/en_US/en_US.news.txt")[[1]],file.info("final/en_US/en_US.twitter.txt")[[1]]))
+names(size) <- c("data_type","size(MB)")
+size <- size[2]/10^6
+size
+```
+
+So from blogs and news we have a text file > 200 MB and from Twitter we have approx. 170 MB.
+This dataset is fairly large and thus we can use a smaller subset or a sample to perform our exploratory analysis (10% should be enough). 
+
+## Data loading and processing
+
+```{r, eval=FALSE}
+con <- file("final/en_US/en_US.blogs.txt","rb")
+blogs <- NULL
+blogs <- append(blogs, readLines(con,-1,encoding="UTF-8"))
+blogs <- iconv(blogs, "UTF-8", "ascii", sub=" ")
+close(con)
+
+con <- file("final/en_US/en_US.twitter.txt","rb")
+twitter <- NULL
+twitter <- append(twitter, readLines(con,-1,encoding="UTF-8",skipNul=T))
+twitter <- iconv(twitter, "UTF-8", "ascii", sub=" ")
+close(con)
+
+con <- file("final/en_US/en_US.news.txt","rb")
+news <- NULL
+news <- append(news, readLines(con,-1,encoding="UTF-8",skipNul=T))
+news <- iconv(news, "UTF-8", "ascii", sub=" ")
+close(con)
+
+```
+
+Basic summary statistics:
+```{r}
+size2 <- data.frame(c("blogs","news","twitter"),c(length(blogs),length(news),length(twitter)), c(max(nchar(blogs)),max(nchar(news)),max(nchar(twitter))))
+names(size2) <- c("Corpora source","No of lines","Longest line")
+size2 
+```
+
+Now we can sample our data:
+```{r,eval=FALSE}
+t_sample <- sample(twitter,size =  0.02*length(twitter),replace = FALSE)
+b_sample <- sample(blogs,size =  0.02*length(blogs),replace = FALSE)
+n_sample <- sample(news,size =  0.02*length(news),replace = FALSE)
+all_sample <- paste(c(t_sample, b_sample, n_sample))
+```
+
+## Cleaning data
+Through the first two Lessons, there were many references to tm package, so i'll use it to transform and clean our dataset.
+There is a nice article about text mining in R, especially with tm package:
+https://www.jstatsoft.org/index.php/jss/article/view/v025i05/v25i05.pdf
+
+First we will transform our character vectors into Corpus and combine them together.
+
+```{r,eval=FALSE}
+FullCorpus <- VCorpus(VectorSource(all_sample))
+```
+
+Now we can perform few transformation on our Corpus. Below you can find probably the most widely used set of transformation. However i've obtain some minor problems like:
+
+`Error in FUN(content(x), ...) :
+invalid input 'Single and mingling đź' in 'utf8towcs'`
+
+Or:
+
+` Error in UseMethod("content", x) : 
+  no applicable method for 'content' applied to an object of class "character" `
+
+So here is what I did as a work around:
+```{r, eval=FALSE}
+revs0 <- tm_map(FullCorpus, content_transformer(function(x) iconv(x, to="ASCII", sub=" ")))
+revs1 <- tm_map(revs0, PlainTextDocument)
+
+removeNumAndPunct <- function(x) gsub("[^[:alpha:][:space:]']|^'|'$|\\W'", " ", x)
+revs1a <- tm_map(revs1, content_transformer(removeNumAndPunct))
+revs2 <- tm_map(revs1a, content_transformer(tolower))
+```
+
+After above changes, we can remove stopwords, punctuaction, numbers, whitespace.
+
+```{r, eval=FALSE}
+
+revs3 <- tm_map(revs2, removePunctuation)  
+#nie brałem bo don't a nie don t i i'm a nie i m
+revs4 <- tm_map(revs2, removeNumbers) 
+revs5 <- tm_map(revs4, stripWhitespace)
+revs6 <- tm_map(revs5, removeWords, stopwords("english")) 
+# nie brałem
+```
+
+We also want to delete profanity words (obtained from http://www.cs.cmu.edu/~biglou/resources/bad-words.txt).
+
+```{r,eval=FALSE}
+download.file("http://www.cs.cmu.edu/~biglou/resources/bad-words.txt",destfile = "bad_words.txt")
+badwords <- readLines("bad_words.txt")
+revs7 <- tm_map(revs5, removeWords, badwords)
+
+## Term-document matrices tend to get very big already for normal sized data sets.  Therefore tm package provide a method to remove sparse terms, i.e., terms occurring only in very few documents. I'll use it in the main project.
+
+```
+
+## Tokenization
+
+For this analysis we will use only 1-word ngram to explore data and look at frequencies. For the main project, we'll use also bigrams and trigrams and so on.
+
+```{r,eval=FALSE}
+token_delim <- " \\r\\n\\t.,;:\"()?!"
+unigramTokenizer <-function(x) { RWeka::NGramTokenizer(x, RWeka::Weka_control(min = 1, max = 1, delimiters=token_delim))}
+bigramTokenizer <- function(x) { RWeka::NGramTokenizer(x, RWeka::Weka_control(min = 2, max = 2, delimiters=token_delim))}
+trigramTokenizer <- function(x) { RWeka::NGramTokenizer(x, RWeka::Weka_control(min = 3, max = 3, delimiters=token_delim))}
+quadrigramTokenizer <- function(x) { RWeka::NGramTokenizer(x, RWeka::Weka_control(min = 4, max = 4, delimiters=token_delim))}
+uni_tdm <- TermDocumentMatrix(revs7, control=list(tokenize = unigramTokenizer))
+#uni_tdm <- rollup(uni_tdm, 2, na.rm=TRUE)
+bi_tdm <- TermDocumentMatrix(revs7, control=list(tokenize = bigramTokenizer))
+#bi_tdm <- rollup(bi_tdm, 2, na.rm=TRUE)
+tri_tdm <- TermDocumentMatrix(revs7, control=list(tokenize = trigramTokenizer))
+#tri_tdm <- rollup(tri_tdm, 2, na.rm=TRUE)
+quadri_tdm <- TermDocumentMatrix(revs7, control=list(tokenize = quadrigramTokenizer))
+#quadri_tdm<- rollup(quadri_tdm, 2, na.rm=TRUE)
+
+```
+
+Now we can plot most frequent unigrams (remember that we have deleted stop words and profanity words)
+
+```{r}
+uni_F<-row_sums(uni_tdm)
+uni_F<-sort(uni_F, decreasing=T)
+barplot(uni_F[1:30], las=3,main="Most frequent unigrams",col = "cadetblue",ylab = "Frequency",density = 75)
+bi_F<-row_sums(bi_tdm)
+bi_F<-sort(bi_F, decreasing=T)
+barplot(bi_F[1:30], las=3,main="Most frequent unigrams",col = "cadetblue",ylab = "Frequency",density = 75)
+tri_F<-row_sums(tri_tdm)
+tri_F<-sort(tri_F, decreasing=T)
+barplot(tri_F[1:30], las=3,main="Most frequent unigrams",col = "cadetblue",ylab = "Frequency",density = 75)
+four_F<-row_sums(quadri_tdm)
+four_F<-sort(four_F, decreasing=T)
+barplot(four_F[1:30], las=3,main="Most frequent unigrams",col = "cadetblue",ylab = "Frequency",density = 75)
+
+unigram.matrix <- as.matrix(uni_tdm)
+bigram.matrix <- as.matrix(bi_tdm)
+trigram.matrix <- as.matrix(tri_tdm)
+quadrigram.matrix <- as.matrix(quadri_tdm)
+```
+
+Now we can see, that our attempt to filter out stop words didn't work very well. It turned out, the order that we had removed spaces, punctuation, etc, had concatenated new stopwords back in. We'll fix it in the main project.
+
+Because it's the first time we play with natural language, we can use very nice package:wordcloud
+
+```{r}
+m <- as.matrix(uni_tdm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+
+wordcloud(d$word,d$freq, scale=c(4,.3),min.freq=2,max.words=50, random.order=F, rot.per=.15, colors=brewer.pal(8,"Dark2"))
+```
+
+
+## Plans for creating a prediction algorithm and Shiny app
+The next stage of this capstone project would be to create predictive algoritm and a ShinyApp.
+Below you can find initial plan to achive this goal.
+
+* Remove spars words
+* Remove stop words
+* Create additional tdm for 2-word, 3-word, 4-word ngrams
+* Summarize frequency of tokens and find association between tokens.
+* Build a prediction model based on sample data
+* Deploy ShinyApp with field where you can put a word and click submit, in response you'll recieve three most likely next words from our predictive model.
+
+ddtm <- DocumentTermMatrix(d, control = list(
+    weighting = weightTfIdf,
+    minWordLength = 2))
+findFreqTerms(ddtm, 10)

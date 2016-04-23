@@ -1,0 +1,272 @@
+---
+title: "Capstone Project"
+author: "Krystian Szczucki"
+date: "Thursday, March 31, 2016"
+output: html_document
+---
+
+```{r,eval=FALSE}
+library(tm)
+library(RWeka)
+library(slam)
+library(utils)
+library(tau)
+
+con <- file("final/en_US/en_US.blogs.txt","rb")
+blogs <- NULL
+blogs <- append(blogs, readLines(con,-1,encoding="UTF-8"))
+blogs <- iconv(blogs, "UTF-8", "ascii", sub=" ")
+close(con)
+
+con <- file("final/en_US/en_US.twitter.txt","rb")
+twitter <- NULL
+twitter <- append(twitter, readLines(con,-1,encoding="UTF-8",skipNul=T))
+twitter <- iconv(twitter, "UTF-8", "ascii", sub=" ")
+close(con)
+
+con <- file("final/en_US/en_US.news.txt","rb")
+news <- NULL
+news <- append(news, readLines(con,-1,encoding="UTF-8",skipNul=T))
+news <- iconv(news, "UTF-8", "ascii", sub=" ")
+close(con)
+
+
+t_sample <- sample(twitter,size =  0.1*length(twitter),replace = FALSE)
+b_sample <- sample(blogs,size =  0.1*length(blogs),replace = FALSE)
+n_sample <- sample(news,size =  0.1*length(news),replace = FALSE)
+all_sample <- tolower(paste(c(t_sample, b_sample, n_sample)))
+
+```
+
+```{r,eval=FALSE}
+process<- function(x) {
+        # Text Transformations to remove odd characters #
+        # replace APOSTROPHES OF 2 OR MORE with space - WHY??? that never happens..
+        # output=lapply(output,FUN= function(x) gsub("'{2}"rr, " ",x))
+        # Replace numbers with spaces... not sure why to do that yet either.
+        # output=lapply(output,FUN= function(x) gsub("[0-9]", " ",x))
+        #erase # tags
+        x=gsub("\\#", "", x)
+        # Erase commas.
+        x=gsub(",?", "", x)
+        # Erase ellipsis
+        x=gsub("\\.{3,}", "", x)
+        # Erase colon
+        x=gsub("\\:", "", x)
+        # Merge on contractions (apostrophe):
+        x=gsub("\\'", "", x)
+        # Erase |:
+        x=gsub("\\|", "", x)
+        # Erase {}:
+        x=gsub("\\{", "", x)
+        x=gsub("\\}", "", x)
+        # Erase []:
+        x=gsub("\\[|\\]","",x)
+        ##### SENTENCE SPLITTING AND CLEANUP
+        # Split into sentences only on single periods or any amount of question marks or exclamation marks and -
+        # ok here is where you change structure fundamentally... 
+        # Faster if I unlist once? no i guess it keeps getting relisted.
+        x<-strsplit(unlist(x),"[\\.]{1}")
+        x<-strsplit(unlist(x),"\\?+")
+        x<-strsplit(unlist(x),"\\!+")
+        x<-strsplit(unlist(x),"\\-+")
+        
+        # Split also on parentheses
+        x<-strsplit(unlist(x),"\\(+")
+        x<-strsplit(unlist(x),"\\)+")
+        # split also on quotation marks
+        x<-strsplit(unlist(x),"\\\"")
+        # remove spaces at start and end of sentences:
+        # HERE is where the problem begins. why?
+        x<-gsub("^\\s+", "", unlist(x))
+        x<-gsub("\\s+$", "", unlist(x))
+        # Replace ~ and any whitespace around with just one space
+        x<-gsub("\\s*~\\s*", " ", unlist(x))
+        # Replace forward slash with space
+        x<-gsub("\\/", " ", unlist(x))
+        # Replace + signs with space
+        x<-gsub("\\+", " ", unlist(x))
+        # it s a 
+        x<-gsub("it s ", "its ", unlist(x))
+        # 'i m not'
+        x<-gsub("i m not", "im not", unlist(x))
+        # 'i didn t'
+        x<-gsub("i didn t", "i didnt", unlist(x))
+        # 'i don t'
+        x<-gsub("i don t", "i dont", unlist(x))
+        # ' i m '
+        x<-gsub(" i m ", " im ", unlist(x))
+        
+        # Eliminate empty and single letter values (more?)
+        # x=x[which(nchar(x)!=1)]
+        x=x[which(nchar(x)!=0)]
+        x = tolower(x)
+        #eliminate more than one space
+        gsub("\\s+"," ",x)
+}
+
+---
+        
+tokens <- unlist(strsplit(all_sample, " "))
+tokens <- tokens[tokens != ""]
+tokens <- process(tokens)
+tokens2 <- c(tokens[-1], ".")
+tokens3 <- c(tokens2[-1], ".")
+tokens4 <- c(tokens3[-1], ".")
+
+bigrams <- paste(tokens,tokens2)
+freq1 <- sort(table(bigrams),decreasing = T)
+
+trigrams <- paste(tokens, tokens2, tokens3)
+freq2 <- sort(table(trigrams),decreasing = T)
+
+quadrigrams <- paste(tokens, tokens2, tokens3, tokens4)
+freq3 <- sort(table(quadrigrams),decreasing = T)
+
+for (b in names(freq2)[1:15]) {
+     cat(b, freq2[b], freq2[b]/length(tokens), "\n", sep="\t")
+};
+
+
+f <- function(queryHistoryTab, query, n = 3) {
+        require(tau)
+        trigrams <- sort(textcnt(rep(names(queryHistoryTab), queryHistoryTab), method = "string", n = length(scan(text = query, what = "character", quiet = TRUE)) + 1))
+        query <- tolower(query)
+        idx <- which(substr(names(trigrams), 0, nchar(query)) == query)
+        res <- head(names(sort(trigrams[idx], decreasing = TRUE)), n)
+        res <- substr(res, nchar(query) + 2, nchar(res))
+        return(res)
+}
+f(c("Can of beer" = 3, "can of Soda" = 2, "A can of water" = 1, "Buy me a can of soda, please" = 2), "Can of")
+# [1] "soda" "beer"
+quiz <- read.csv("Quiz3.txt",header = F,sep = "\n")
+quiz2 <- data.frame(lapply(quiz, as.character), stringsAsFactors=FALSE)
+
+
+makeCorpus<- function(x) {
+corpus<-Corpus(VectorSource(x))
+# corpus <- tm_map(corpus, stripWhitespace)
+corpus <- tm_map(corpus, content_transformer(tolower))
+# corpus <- tm_map(corpus, removeWords, stopwords("english"))
+#corpus <- tm_map(corpus, stemDocument)
+#corpus<- tm_map(corpus,removePunctuation)
+# corpus<- tm_map(corpus,removeNumbers)
+return(corpus)
+}
+
+getPred=function(x){
+        #TEST:
+        #x=0
+        # Take an input:
+        test=read.csv("Quiz3.txt",header = F,sep = "\n")
+        test=test$V1[x]
+        # transform as training set was (lowercase, stem, strip punctuation etc.)
+        test=iconv(test, to='ASCII', sub=' ')
+        test=process(test)
+        test=paste0(test, collapse=" ")
+        corpus<-makeCorpus(test)
+        corpus=as.character(corpus[[1]][1])
+        
+        # Split by words:
+        words<-unlist(strsplit(corpus,"\\s+"))
+        
+        # Isolate last two words of the sentence
+        # Loop here to make set of trigrams.
+        correct=0
+        total=length(words)-2
+        # how many trigrams will there be? 
+        # in a 4 word sentence, 2 so length-2.
+        # therefore, need exception not to run this when length is less than 3 words.
+        if(length(words)>=3){
+                lapply(1:total,FUN=function(x){
+                        # loop through sentence making bigram and answer, 
+                        bigram=paste(words[x], words[x+1])
+                        answer=paste(words[x+2])
+                        # then check answer against predicted answer.
+                        # Get answer
+                        Xpred=freq2[grep(pattern = paste0("^",bigram," "),x = names(freq2))]
+                        # isolate the answer from prediction table.
+                        Xpred = names(Xpred[1])
+                        Xpred=Xpred[length(Xpred)]
+                        # Test equality of prediction to actual and counter for the accuracy measure
+                        if(!is.na(Xpred)){
+                                if(Xpred==paste(bigram,answer)){correct=correct+1}        
+                                correct<<-correct
+                        } 
+                })
+        }
+        accuracy = correct/total
+        # paste("Correct: ", correct, "total: ", total, "Accuracy: ", accuracy)
+        return(accuracy)
+}
+
+getPred2=function(x){
+        #TEST:
+        #x=0
+        # Take an input:
+        debug()
+        test=read.csv("Quiz3.txt",header = F,sep = "\n")
+        test=test$V1[x]
+        # transform as training set was (lowercase, stem, strip punctuation etc.)
+        test=iconv(test, to='ASCII', sub=' ')
+        test=process(test)
+        test=paste0(test, collapse=" ")
+        corpus<-makeCorpus(test)
+        corpus=as.character(corpus[[1]][1])
+        
+        # Split by words:
+        words<-unlist(strsplit(corpus,"\\s+"))
+        
+        # Isolate last two words of the sentence
+        # Loop here to make set of 4grams.
+        correct=0
+        total=length(words)-3
+        # how many 4grams will there be? 
+        # in a 4 word sentence, 2 so length-2.
+        # therefore, need exception not to run this when length is less than 3 words.
+        if(length(words)>=4){
+                lapply(1:total,FUN=function(x){
+                        # loop through sentence making bigram and answer, 
+                        trigram=paste(words[x], words[x+1], words[x+2])
+                        answer=paste(words[x+3])
+                        # then check answer against predicted answer.
+                        # Get answer
+                        Xpred=freq3[grep(pattern = paste0("^",trigram," "),x = names(freq3))]
+                        # isolate the answer from prediction table.
+                        Xpred = names(Xpred[1])
+                        Xpred=Xpred[length(Xpred)]
+                        # Test equality of prediction to actual and counter for the accuracy measure
+                        if(!is.na(Xpred)){
+                                if(Xpred==paste(trigram,answer)){correct=correct+1}        
+                                correct<<-correct
+                        } 
+                })
+        }
+        accuracy = correct/total
+        # paste("Correct: ", correct, "total: ", total, "Accuracy: ", accuracy)
+        return(accuracy)
+}
+
+check<-function(x){
+        bigram=x
+	Xpred=freq2[grep(pattern = paste0("^",bigram," "),x = names(freq2))]
+        Xpred = names(Xpred[1])
+        Xpred=Xpred[length(Xpred)]
+	paste(bigram, "[",substr(Xpred,nchar(bigram)+ 2,nchar(Xpred)),"]")
+}
+
+check2<-function(x){
+        trigram=x
+        Xpred=freq3[grep(pattern = paste0("^",trigram," "),x = names(freq3))]
+        Xpred = names(Xpred[1])
+        Xpred=Xpred[length(Xpred)]
+	paste(trigram, "[",substr(Xpred,nchar(trigram)+ 2,nchar(Xpred)),"]")
+}
+
+results=unlist(lapply(1:10,getPred))
+mean(results)
+
+# save(freq1, file='freq1.RData')
+# save(freq2, file='freq2.RData')
+#s ave(freq3, file='freq3.RData')
+```
